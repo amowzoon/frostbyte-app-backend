@@ -1,0 +1,3 @@
+[submodule "server/processing/MobileSAM"]
+	path = server/processing/MobileSAM
+	url = https://github.com/ChaoningZhang/MobileSAM.git

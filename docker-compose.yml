@@ -1,0 +1,12 @@
+services:
+  server:
+    build: ./server
+    container_name: frostbyte-server
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./server:/app
+    environment:
+      - SUPABASE_URL=https://izmvxaayfqiznokbpfif.supabase.co
+      - SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml6bXZ4YWF5ZnFpem5va2JwZmlmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NDgwMjE4NiwiZXhwIjoyMDkwMzc4MTg2fQ.8F2SRLo0FHbnZtsmAz7dTYlkcOdwjZ5bggSBtgHDubk
+    restart: unless-stopped
