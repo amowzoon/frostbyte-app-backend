@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Frostbyte · IR Calibration</title>
+  <link rel="stylesheet" href="/static/capture.css">
+  <link rel="stylesheet" href="/static/calibration.css">
+</head>
+<body>
+
+<nav>
+  <span class="nav-brand">⬡ Frostbyte</span>
+  <div class="nav-div"></div>
+  <div class="nav-links">
+    <a href="/capture"     class="nav-link">Capture</a>
+    <a href="/data-viewer" class="nav-link">Data Viewer</a>
+    <a href="/dashboard"   class="nav-link">Debug</a>
+    <a href="/calibration" class="nav-link active">IR Calibration</a>
+  </div>
+  <div class="nav-right">
+    <span class="status-pill" id="calib-status">no calibration loaded</span>
+  </div>
+</nav>
+
+<!-- SESSION LOADER BAR -->
+<div class="session-bar">
+  <span class="session-bar-label">Session</span>
+  <input type="text" id="session-id-input" placeholder="paste session_id or pick from list…">
+  <button class="action-btn" onclick="loadSession()">Load</button>
+  <button class="action-btn secondary" onclick="fetchRecentSessions()">Recent Sessions</button>
+  <div class="nav-div"></div>
+  <span class="session-bar-label">Active pair</span>
+  <span class="pair-indicator" id="active-pair-indicator">—</span>
+  <div class="nav-div"></div>
+  <span class="session-bar-label hint" id="instruction-text">Load a session to begin</span>
+</div>
+
+<!-- RECENT SESSIONS DROPDOWN -->
+<div class="sessions-dropdown" id="sessions-dropdown" style="display:none;">
+  <div class="sessions-dropdown-hdr">
+    <span>Recent Sessions</span>
+    <button class="close-btn" onclick="closeSessionsDropdown()">✕</button>
+  </div>
+  <div id="sessions-list"></div>
+</div>
+
+<!-- MAIN LAYOUT -->
+<div class="main-layout">
+
+  <!-- LEFT: IR PANEL -->
+  <div class="image-panel" id="ir-panel">
+    <div class="panel-hdr">
+      <span class="panel-title ir">IR / Thermal</span>
+      <span class="panel-hint">160 × 120 native</span>
+      <span class="panel-mode-badge" id="ir-mode-badge">waiting</span>
+    </div>
+    <div class="canvas-container" id="ir-container">
+      <canvas id="ir-canvas"></canvas>
+      <div class="canvas-placeholder" id="ir-placeholder">
+        <span>No IR image loaded</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- CENTER: CONTROLS -->
+  <div class="controls-panel">
+
+    <div class="controls-section">
+      <div class="section-title">Point Pairs</div>
+      <div class="pairs-list" id="pairs-list">
+        <div class="pairs-empty">No points yet.<br>Click IR image first,<br>then RGB image.</div>
+      </div>
+    </div>
+
+    <div class="controls-section">
+      <div class="section-title">Actions</div>
+      <button class="action-btn full danger" onclick="undoLastPair()" id="btn-undo">Undo Last</button>
+      <button class="action-btn full danger" onclick="clearAllPairs()" id="btn-clear">Clear All</button>
+    </div>
+
+    <div class="controls-section">
+      <div class="section-title">Compute</div>
+      <div class="pair-count-display">
+        <span id="pair-count">0</span>
+        <span class="pair-count-label">/ 4 min pairs</span>
+      </div>
+      <button class="action-btn full primary" id="btn-compute" onclick="computeHomography()" disabled>
+        Compute Homography
+      </button>
+    </div>
+
+    <div class="controls-section" id="preview-section" style="display:none;">
+      <div class="section-title">Preview</div>
+      <div class="preview-container">
+        <img id="preview-img" src="" alt="warp preview">
+      </div>
+      <div class="error-badge" id="reproj-error"></div>
+    </div>
+
+    <div class="controls-section" id="save-section" style="display:none;">
+      <div class="section-title">Save</div>
+      <button class="action-btn full success" id="btn-save" onclick="saveCalibration()">
+        Save Calibration
+      </button>
+      <div class="save-status" id="save-status"></div>
+    </div>
+
+  </div>
+
+  <!-- RIGHT: RGB PANEL -->
+  <div class="image-panel" id="rgb-panel">
+    <div class="panel-hdr">
+      <span class="panel-title rgb">RGB Camera</span>
+      <span class="panel-hint">4608 × 2592 native</span>
+      <span class="panel-mode-badge" id="rgb-mode-badge">waiting</span>
+    </div>
+    <div class="canvas-container" id="rgb-container">
+      <canvas id="rgb-canvas"></canvas>
+      <div class="canvas-placeholder" id="rgb-placeholder">
+        <span>No RGB image loaded</span>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /main-layout -->
+
+<script src="/static/calibration.js"></script>
+</body>
+</html>

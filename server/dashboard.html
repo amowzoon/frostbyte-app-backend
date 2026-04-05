@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Frostbyte · Debug</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+  <style>
+    /* ── Scrollable response areas ───────────────────── */
+    .api-response {
+      max-height: 180px;
+      overflow-y: auto;
+      margin-top: 8px;
+      background: var(--bg-base);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 6px 8px;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--text-sec);
+      white-space: pre-wrap;
+      word-break: break-all;
+      display: none;
+    }
+    .api-response.visible { display: block; }
+
+    /* ── Slider rows ─────────────────────────────────── */
+    .slider-row {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 6px;
+    }
+    .slider-row label {
+      font-family: var(--mono); font-size: 10px;
+      color: var(--text-sec); min-width: 110px; flex-shrink: 0;
+    }
+    .slider-row input[type=range] {
+      flex: 1; height: 3px; background: var(--border);
+      border-radius: 2px; outline: none;
+      -webkit-appearance: none; appearance: none;
+    }
+    .slider-row input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 12px; height: 12px;
+      border-radius: 50%; background: var(--accent); cursor: pointer;
+      border: 2px solid var(--bg-panel);
+    }
+    .slider-val {
+      font-family: var(--mono); font-size: 10px;
+      color: var(--text-pri); min-width: 48px; text-align: right;
+    }
+
+    /* ── Toggle switch ───────────────────────────────── */
+    .toggle-row {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+    }
+    .toggle-row label.lbl {
+      font-family: var(--mono); font-size: 10px;
+      color: var(--text-sec); flex: 1;
+    }
+    .tog { position: relative; width: 28px; height: 15px; flex-shrink: 0; }
+    .tog input { display: none; }
+    .tog-slider {
+      position: absolute; inset: 0; background: var(--border);
+      border-radius: 8px; cursor: pointer; transition: background 0.2s;
+    }
+    .tog-slider::after {
+      content: ''; position: absolute; width: 11px; height: 11px;
+      border-radius: 50%; background: var(--text-dim);
+      top: 2px; left: 2px; transition: 0.2s;
+    }
+    .tog input:checked + .tog-slider { background: var(--accent); }
+    .tog input:checked + .tog-slider::after { left: 15px; background: #fff; }
+
+    /* ── Section label inside endpoint body ─────────── */
+    .field-section {
+      font-size: 9px; font-weight: 700; letter-spacing: 0.15em;
+      text-transform: uppercase; color: var(--text-dim);
+      padding: 6px 0 4px; border-bottom: 1px solid var(--border-lt);
+      margin-bottom: 6px;
+    }
+
+    /* ── Auto value indicator ────────────────────────── */
+    .auto-badge {
+      font-family: var(--mono); font-size: 9px; color: var(--text-dim);
+      background: var(--bg-hdr); border: 1px solid var(--border);
+      border-radius: 2px; padding: 1px 4px; margin-left: 4px;
+    }
+  </style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <span class="nav-brand">⬡ Frostbyte</span>
+  <div class="nav-div"></div>
+  <div class="nav-links">
+    <a href="/capture"     class="nav-link">Capture</a>
+    <a href="/data-viewer" class="nav-link">Data Viewer</a>
+    <a href="/dashboard"   class="nav-link active">Debug</a>
+  </div>
+  <div class="nav-right">
+    <span class="status-pill" id="ws-status">connecting</span>
+    <span class="status-pill" id="log-status">logs: connecting</span>
+  </div>
+</nav>
+
+<!-- TOOLBAR -->
+<div class="toolbar">
+  <span class="toolbar-label">Device</span>
+  <input type="text" id="device-id" value="pi-001" placeholder="device id">
+  <div class="nav-div"></div>
+  <button class="cap-btn rgb"   onclick="sendCapture('rgb')">rgb</button>
+  <button class="cap-btn ir"    onclick="sendCapture('ir')">ir</button>
+  <button class="cap-btn radar" onclick="sendCapture('radar')">radar</button>
+  <button class="cap-btn all"   onclick="sendCapture('all')">all sensors</button>
+</div>
+
+<!-- MAIN LAYOUT -->
+<div class="main-layout" id="main-layout">
+
+  <!-- TOP: CAPTURES + LOGS -->
+  <div class="split" id="top-section" style="height:55%;">
+    <div class="captures-pane">
+      <div class="pane-hdr">Active Captures</div>
+      <div class="pane-scroll" id="captures-container">
+        <div class="placeholder">no captures yet — use toolbar to trigger</div>
+      </div>
+    </div>
+    <div class="logs-pane">
+      <div class="pane-hdr">Live Server Logs</div>
+      <div class="log-scroll" id="log-container">
+        <div class="log-placeholder">waiting for logs…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RESIZER -->
+  <div class="resizer" id="resizer"></div>
+
+  <!-- BOTTOM: SENSOR API PANEL -->
+  <div class="api-panel" id="bottom-section" style="flex:1;">
+
+    <!-- ── RGB ─────────────────────────────────────────────────────────── -->
+    <div class="api-col">
+      <div class="api-col-hdr rgb">⬡ RGB Camera</div>
+      <div class="api-col-scroll">
+
+        <!-- Status -->
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method GET">GET</span>
+            <span class="api-path">/api/camera/status</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Get current camera status and settings.</div>
+            <button class="api-send-btn" onclick="callApi('GET','/api/camera/status',null,this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+        <!-- Initialize -->
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method POST">POST</span>
+            <span class="api-path">/api/camera/initialize</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Initialize the RGB camera.</div>
+            <button class="api-send-btn" onclick="callApi('POST','/api/camera/initialize',{},this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+        <!-- Uninitialize -->
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method POST">POST</span>
+            <span class="api-path">/api/camera/uninitialize</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Uninitialize and release the RGB camera.</div>
+            <button class="api-send-btn" onclick="callApi('POST','/api/camera/uninitialize',{},this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+        <!-- Reinitialize -->
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method POST">POST</span>
+            <span class="api-path">/api/camera/reinitialize</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Reinitialize the camera with current settings.</div>
+            <button class="api-send-btn" onclick="callApi('POST','/api/camera/reinitialize',{},this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+        <!-- Resolution -->
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method POST">POST</span>
+            <span class="api-path">/api/camera/resolution</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Set camera resolution. Camera will reinitialize.</div>
+            <div class="api-fields">
+              <div class="api-field"><label>width</label><input type="number" id="rgb-res-w" value="4608" min="64" max="4608"></div>
+              <div class="api-field"><label>height</label><input type="number" id="rgb-res-h" value="2592" min="64" max="2592"></div>
+            </div>
+            <button class="api-send-btn" onclick="callApi('POST','/api/camera/resolution',{width:+$('rgb-res-w').value,height:+$('rgb-res-h').value},this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+        <!-- Rotation -->
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method POST">POST</span>
+            <span class="api-path">/api/camera/rotation</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Set camera rotation angle.</div>
+            <div class="api-fields">
+              <div class="api-field">
+                <label>angle</label>
+                <select id="rgb-rot-angle">
+                  <option value="0">0°</option>
+                  <option value="90">90°</option>
+                  <option value="180">180°</option>
+                  <option value="270">270°</option>
+                </select>
+              </div>
+            </div>
+            <button class="api-send-btn" onclick="callApi('POST','/api/camera/rotation',{angle:+$('rgb-rot-angle').value},this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+        <!-- Mirror -->
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method POST">POST</span>
+            <span class="api-path">/api/camera/mirror</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Set camera mirroring.</div>
+            <div class="api-fields">
+              <div class="api-field">
+                <label>horizontal</label>
+                <select id="rgb-mir-h"><option value="false">false</option><option value="true">true</option></select>
+              </div>
+              <div class="api-field">
+                <label>vertical</label>
+                <select id="rgb-mir-v"><option value="false">false</option><option value="true">true</option></select>
+              </div>
+            </div>
+            <button class="api-send-btn" onclick="callApi('POST','/api/camera/mirror',{horizontal:$('rgb-mir-h').value==='true',vertical:$('rgb-mir-v').value==='true'},this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+        <!-- Capture RGB — full controls -->
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method POST">POST</span>
+            <span class="api-path">/api/capture [rgb]</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Trigger an RGB capture. All fields optional — leave blank for auto.</div>
+
+            <div class="field-section">Focus</div>
+            <div class="toggle-row">
+              <label class="lbl">manual focus</label>
+              <label class="tog">
+                <input type="checkbox" id="rgb-focus-en" onchange="document.getElementById('rgb-focus-wrap').style.display=this.checked?'block':'none'">
+                <div class="tog-slider"></div>
+              </label>
+            </div>
+            <div id="rgb-focus-wrap" style="display:none">
+              <div class="slider-row">
+                <label>focus (0=∞, 10=close)</label>
+                <input type="range" min="0" max="10" step="0.1" value="5" id="rgb-focus-sl"
+                       oninput="$('rgb-focus-val').textContent=parseFloat(this.value).toFixed(1)">
+                <span class="slider-val" id="rgb-focus-val">5.0</span>
+              </div>
+            </div>
+
+            <div class="field-section">Exposure</div>
+            <div class="toggle-row">
+              <label class="lbl">manual exposure</label>
+              <label class="tog">
+                <input type="checkbox" id="rgb-exp-en" onchange="document.getElementById('rgb-exp-wrap').style.display=this.checked?'block':'none'">
+                <div class="tog-slider"></div>
+              </label>
+            </div>
+            <div id="rgb-exp-wrap" style="display:none">
+              <div class="slider-row">
+                <label>exposure (µs)</label>
+                <input type="range" min="100" max="100000" step="100" value="10000" id="rgb-exp-sl"
+                       oninput="$('rgb-exp-val').textContent=parseInt(this.value).toLocaleString()+'µs'">
+                <span class="slider-val" id="rgb-exp-val">10,000µs</span>
+              </div>
+              <div class="slider-row">
+                <label>gain (1–16)</label>
+                <input type="range" min="1" max="16" step="0.1" value="1" id="rgb-gain-sl"
+                       oninput="$('rgb-gain-val').textContent=parseFloat(this.value).toFixed(1)">
+                <span class="slider-val" id="rgb-gain-val">1.0</span>
+              </div>
+            </div>
+
+            <div class="field-section">White Balance</div>
+            <div class="api-fields">
+              <div class="api-field">
+                <label>awb mode</label>
+                <select id="rgb-cap-awb">
+                  <option value="">auto</option>
+                  <option value="incandescent">incandescent</option>
+                  <option value="tungsten">tungsten</option>
+                  <option value="fluorescent">fluorescent</option>
+                  <option value="indoor">indoor</option>
+                  <option value="daylight">daylight</option>
+                  <option value="cloudy">cloudy</option>
+                  <option value="custom">custom</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="field-section">Image Adjustments</div>
+            <div class="slider-row">
+              <label>brightness (-1 to 1)</label>
+              <input type="range" min="-100" max="100" step="1" value="0" id="rgb-bright-sl"
+                     oninput="$('rgb-bright-val').textContent=(this.value/100).toFixed(2)">
+              <span class="slider-val" id="rgb-bright-val">0.00</span>
+            </div>
+            <div class="slider-row">
+              <label>contrast (0 to 2)</label>
+              <input type="range" min="0" max="200" step="1" value="100" id="rgb-contrast-sl"
+                     oninput="$('rgb-contrast-val').textContent=(this.value/100).toFixed(2)">
+              <span class="slider-val" id="rgb-contrast-val">1.00</span>
+            </div>
+
+            <button class="api-send-btn" onclick="sendRgbCaptureFull(this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+      </div>
+    </div><!-- /rgb col -->
+
+    <!-- ── IR ──────────────────────────────────────────────────────────── -->
+    <div class="api-col">
+      <div class="api-col-hdr ir">⬡ IR / Thermal</div>
+      <div class="api-col-scroll">
+
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method GET">GET</span>
+            <span class="api-path">/api/ir/status</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Get IR camera status, streaming state, and Redis keys.</div>
+            <button class="api-send-btn" onclick="callApi('GET','/api/ir/status',null,this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method POST">POST</span>
+            <span class="api-path">/api/ir/initialize</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Initialize the IR camera. Waits for Lepton to boot.</div>
+            <button class="api-send-btn" onclick="callApi('POST','/api/ir/initialize',{},this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method POST">POST</span>
+            <span class="api-path">/api/ir/uninitialize</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Stop streaming and release IR camera resources.</div>
+            <button class="api-send-btn" onclick="callApi('POST','/api/ir/uninitialize',{},this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method POST">POST</span>
+            <span class="api-path">/api/ir/reinitialize</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Uninitialize then reinitialize the IR camera.</div>
+            <button class="api-send-btn" onclick="callApi('POST','/api/ir/reinitialize',{},this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method POST">POST</span>
+            <span class="api-path">/api/ir/ffc</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Flat Field Correction calibration (~2s). Run after warmup or when image quality degrades.</div>
+            <button class="api-send-btn" onclick="callApi('POST','/api/ir/ffc',{},this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+        <!-- Capture IR — full controls -->
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method POST">POST</span>
+            <span class="api-path">/api/capture [ir]</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Trigger an IR capture with optional colormap and timeout.</div>
+
+            <div class="field-section">Colormap</div>
+            <div class="api-fields">
+              <div class="api-field">
+                <label>colormap</label>
+                <select id="ir-cap-colormap">
+                  <option value="">grayscale</option>
+                  <option value="jet">jet</option>
+                  <option value="hot">hot</option>
+                  <option value="cool">cool</option>
+                  <option value="rainbow">rainbow</option>
+                  <option value="turbo">turbo</option>
+                  <option value="viridis">viridis</option>
+                  <option value="bone">bone</option>
+                  <option value="autumn">autumn</option>
+                </select>
+              </div>
+              <div class="api-field">
+                <label>save raw .npy</label>
+                <select id="ir-cap-raw"><option value="true">true</option><option value="false">false</option></select>
+              </div>
+            </div>
+
+            <div class="field-section">Timeout</div>
+            <div class="slider-row">
+              <label>timeout (s)</label>
+              <input type="range" min="5" max="60" step="5" value="20" id="ir-timeout-sl"
+                     oninput="$('ir-timeout-val').textContent=parseFloat(this.value/10).toFixed(1)+'s'">
+              <span class="slider-val" id="ir-timeout-val">2.0s</span>
+            </div>
+
+            <button class="api-send-btn" onclick="sendIrCaptureFull(this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+      </div>
+    </div><!-- /ir col -->
+
+    <!-- ── RADAR ────────────────────────────────────────────────────────── -->
+    <div class="api-col">
+      <div class="api-col-hdr radar">⬡ Radar</div>
+      <div class="api-col-scroll">
+
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method GET">GET</span>
+            <span class="api-path">/api/radar/status</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Get radar initialization state, ports, and Redis connection.</div>
+            <button class="api-send-btn" onclick="callApi('GET','/api/radar/status',null,this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method POST">POST</span>
+            <span class="api-path">/api/radar/initialize</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Initialize radar with automatic GPIO reset. Takes ~5–10s.</div>
+            <button class="api-send-btn" onclick="callApi('POST','/api/radar/initialize',{},this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method POST">POST</span>
+            <span class="api-path">/api/radar/reset</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Hardware reset via GPIO17 (NRST pin). Reconfiguration needed after reset.</div>
+            <button class="api-send-btn" onclick="callApi('POST','/api/radar/reset',{},this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method POST">POST</span>
+            <span class="api-path">/api/radar/power_cycle</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Full USB power cycle (unbind → rebind → reinitialize). Use when radar is stuck with dead USB.</div>
+            <button class="api-send-btn" onclick="callApi('POST','/api/radar/power_cycle',{},this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+        <!-- Capture radar -->
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method POST">POST</span>
+            <span class="api-path">/api/capture [radar]</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Trigger a radar capture.</div>
+            <div class="field-section">Timeout</div>
+            <div class="slider-row">
+              <label>timeout (s)</label>
+              <input type="range" min="5" max="100" step="5" value="20" id="radar-timeout-sl"
+                     oninput="$('radar-timeout-val').textContent=parseFloat(this.value/10).toFixed(1)+'s'">
+              <span class="slider-val" id="radar-timeout-val">2.0s</span>
+            </div>
+            <button class="api-send-btn" onclick="callApi('POST','/api/capture',{type:'radar',timeout:parseFloat($('radar-timeout-sl').value/10)},this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+      </div>
+    </div><!-- /radar col -->
+
+    <!-- ── TEMPERATURE ───────────────────────────────────────────────────── -->
+    <div class="api-col">
+      <div class="api-col-hdr temp">⬡ Temperature</div>
+      <div class="api-col-scroll">
+
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method GET">GET</span>
+            <span class="api-path">/api/temperature/status</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Get sensor status, UART state, and live Pico status if connected.</div>
+            <button class="api-send-btn" onclick="callApi('GET','/api/temperature/status',null,this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method POST">POST</span>
+            <span class="api-path">/api/temperature/initialize</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Open UART connection to the Pico 2W temperature sensor.</div>
+            <button class="api-send-btn" onclick="callApi('POST','/api/temperature/initialize',{},this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method POST">POST</span>
+            <span class="api-path">/api/temperature/uninitialize</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Close UART connection to the temperature sensor.</div>
+            <button class="api-send-btn" onclick="callApi('POST','/api/temperature/uninitialize',{},this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+        <!-- Capture temperature — full controls -->
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method POST">POST</span>
+            <span class="api-path">/api/capture [temperature]</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Trigger a temperature reading from the Pico 2W.</div>
+
+            <div class="field-section">Mode</div>
+            <div class="api-fields">
+              <div class="api-field">
+                <label>mode</label>
+                <select id="temp-cap-mode">
+                  <option value="raw">raw</option>
+                  <option value="avg">avg</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="field-section">Readings</div>
+            <div class="slider-row">
+              <label>n readings (1–200)</label>
+              <input type="range" min="1" max="200" step="1" value="1" id="temp-n-sl"
+                     oninput="$('temp-n-val').textContent=this.value">
+              <span class="slider-val" id="temp-n-val">1</span>
+            </div>
+
+            <div class="field-section">Timeout</div>
+            <div class="slider-row">
+              <label>timeout (s)</label>
+              <input type="range" min="5" max="120" step="5" value="50" id="temp-timeout-sl"
+                     oninput="$('temp-timeout-val').textContent=parseFloat(this.value/10).toFixed(1)+'s'">
+              <span class="slider-val" id="temp-timeout-val">5.0s</span>
+            </div>
+
+            <button class="api-send-btn" onclick="sendTempCaptureFull(this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+      </div>
+    </div><!-- /temp col -->
+
+    <!-- ── ALL SENSORS ───────────────────────────────────────────────────── -->
+    <div class="api-col">
+      <div class="api-col-hdr all">⬡ All Sensors</div>
+      <div class="api-col-scroll">
+
+        <!-- Capture all — full controls -->
+        <div class="api-endpoint">
+          <div class="api-endpoint-hdr" onclick="toggleEndpoint(this)">
+            <span class="api-method POST">POST</span>
+            <span class="api-path">/api/capture [all]</span>
+            <span class="api-chevron">▶</span>
+          </div>
+          <div class="api-endpoint-body">
+            <div class="api-desc">Capture all sensors concurrently with a single capture_id. Returns sync_metadata with per-sensor timing offsets.</div>
+
+            <div class="field-section">Sync</div>
+            <div class="toggle-row">
+              <label class="lbl">concurrent capture</label>
+              <label class="tog">
+                <input type="checkbox" id="all-sync" checked>
+                <div class="tog-slider"></div>
+              </label>
+            </div>
+            <div class="toggle-row">
+              <label class="lbl">skip AF settle (faster)</label>
+              <label class="tog">
+                <input type="checkbox" id="all-skip-af">
+                <div class="tog-slider"></div>
+              </label>
+            </div>
+
+            <div class="field-section">Timeout</div>
+            <div class="slider-row">
+              <label>per-sensor timeout (s)</label>
+              <input type="range" min="5" max="100" step="5" value="20" id="all-timeout-sl"
+                     oninput="$('all-timeout-val').textContent=parseFloat(this.value/10).toFixed(1)+'s'">
+              <span class="slider-val" id="all-timeout-val">2.0s</span>
+            </div>
+
+            <div class="field-section">RGB Focus</div>
+            <div class="toggle-row">
+              <label class="lbl">manual focus</label>
+              <label class="tog">
+                <input type="checkbox" id="all-focus-en" onchange="document.getElementById('all-focus-wrap').style.display=this.checked?'block':'none'">
+                <div class="tog-slider"></div>
+              </label>
+            </div>
+            <div id="all-focus-wrap" style="display:none">
+              <div class="slider-row">
+                <label>focus (0=∞, 10=close)</label>
+                <input type="range" min="0" max="10" step="0.1" value="5" id="all-focus-sl"
+                       oninput="$('all-focus-val').textContent=parseFloat(this.value).toFixed(1)">
+                <span class="slider-val" id="all-focus-val">5.0</span>
+              </div>
+            </div>
+
+            <div class="field-section">IR Options</div>
+            <div class="api-fields">
+              <div class="api-field">
+                <label>ir colormap</label>
+                <select id="all-ir-colormap">
+                  <option value="">grayscale</option>
+                  <option value="jet">jet</option>
+                  <option value="hot">hot</option>
+                  <option value="turbo">turbo</option>
+                  <option value="viridis">viridis</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="field-section">Temperature Options</div>
+            <div class="api-fields">
+              <div class="api-field">
+                <label>temp mode</label>
+                <select id="all-temp-mode">
+                  <option value="raw">raw</option>
+                  <option value="avg">avg</option>
+                </select>
+              </div>
+            </div>
+
+            <button class="api-send-btn" onclick="sendAllCapture(this)">Send</button>
+            <div class="api-response"></div>
+          </div>
+        </div>
+
+      </div>
+    </div><!-- /all col -->
+
+  </div><!-- /api-panel -->
+</div><!-- /main-layout -->
+
+<script src="/static/dashboard.js"></script>
+<script>
+// ── New capture helpers ────────────────────────────────────────────────────
+
+function sendRgbCaptureFull(btn) {
+  const body = { type: 'rgb' };
+  if ($('rgb-focus-en').checked)  body.focus         = parseFloat($('rgb-focus-sl').value);
+  if ($('rgb-exp-en').checked) {
+    body.exposure_time = parseInt($('rgb-exp-sl').value);
+    body.gain          = parseFloat($('rgb-gain-sl').value);
+  }
+  const awb = $('rgb-cap-awb').value;
+  if (awb) body.awb_mode = awb;
+  const bright = parseFloat($('rgb-bright-sl').value) / 100;
+  if (bright !== 0) body.brightness = bright;
+  const contrast = parseFloat($('rgb-contrast-sl').value) / 100;
+  if (contrast !== 1) body.contrast = contrast;
+  callApi('POST', '/api/capture', body, btn);
+}
+
+function sendIrCaptureFull(btn) {
+  const body = {
+    type:    'ir',
+    timeout: parseFloat($('ir-timeout-sl').value) / 10,
+    save_raw: $('ir-cap-raw').value === 'true',
+  };
+  const cm = $('ir-cap-colormap').value;
+  if (cm) body.colormap = cm;
+  callApi('POST', '/api/capture', body, btn);
+}
+
+function sendTempCaptureFull(btn) {
+  callApi('POST', '/api/capture', {
+    type:      'temperature',
+    temp_mode: $('temp-cap-mode').value,
+    temp_n:    parseInt($('temp-n-sl').value),
+    timeout:   parseFloat($('temp-timeout-sl').value) / 10,
+  }, btn);
+}
+
+function sendAllCapture(btn) {
+  const body = {
+    type:           'all',
+    sync:           $('all-sync').checked,
+    skip_af_settle: $('all-skip-af').checked,
+    timeout:        parseFloat($('all-timeout-sl').value) / 10,
+    temp_mode:      $('all-temp-mode').value,
+  };
+  if ($('all-focus-en').checked) body.focus = parseFloat($('all-focus-sl').value);
+  const cm = $('all-ir-colormap').value;
+  if (cm) body.colormap = cm;
+  callApi('POST', '/api/capture', body, btn);
+}
+</script>
+</body>
+</html>

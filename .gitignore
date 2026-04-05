@@ -1,0 +1,8 @@
+minio-data/
+postgres-data/
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.log
+.DS_Store
