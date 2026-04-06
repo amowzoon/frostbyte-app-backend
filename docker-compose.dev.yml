@@ -1,0 +1,19 @@
+# Dev override: provides a local shared Redis so mobile-backend
+# can run standalone without frostbyte-backend present.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: mobile-backend-shared-redis-dev
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD}
+      --notify-keyspace-events KEl
+
+  mobile-backend:
+    depends_on:
+      - redis
+      - mobile-redis

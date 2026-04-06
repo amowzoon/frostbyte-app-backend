@@ -1,9 +1,10 @@
-minio-data/
-postgres-data/
+.env
 __pycache__/
 *.pyc
-*.pyo
-.env
-*.log
+.venv/
+venv/
+node_modules/
 .DS_Store
+*.pyo
+*.log
 .vscode/
