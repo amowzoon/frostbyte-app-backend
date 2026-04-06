@@ -4,10 +4,10 @@ Backend for the frostbyte mobile app. Handles push notifications for ice detecti
 
 ## Architecture
 
-- Reads ice mask detections from shared Redis (published by frostbyte-backend)
-- Maintains active alerts table in its own private Redis
-- Compares consecutive detections to decide when to push alerts
-- Serves the mobile app at (future) `/api/app/*`
+- Reads ice mask detections (pixel masks of ice coverage in scene) from shared Redis (published by frostbyte-backend)
+- Maintains active alerts table in its own private Redis (defined in this docker-compose)
+- Compares consecutive detections to decide when to push alerts 
+- Serves the mobile app at (future) `/api/app/*` [NEED TO DISCUSS]
 
 See the detection contract: `frostbyte-backend/docs/detection_contract.md`
 
@@ -62,9 +62,9 @@ Full schema in `frostbyte-backend/docs/detection_contract.md`.
 
 The `mobile-backend` service is a **placeholder**. Ari implements:
 
-- [ ] FastAPI app with `/api/app/*` routes
-- [ ] Own Postgres service in `docker-compose.yml`
+- [ ] FastAPI app with `/api/app/*` routes [NEED TO DISCUSS]
+- [ ] Own database service in this `docker-compose.yml`
 - [ ] Redis subscriber loop on keyspace notifications
 - [ ] Detection comparison logic (two consecutive masks → alert decision)
 - [ ] Push notification integration
-- [ ] Own Dockerfile (replace `image: python:3.12-slim` with `build: .`)
+- [ ] Own Dockerfile
