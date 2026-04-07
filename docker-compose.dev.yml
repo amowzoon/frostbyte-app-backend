@@ -13,9 +13,10 @@ services:
       --requirepass ${REDIS_PASSWORD}
       --notify-keyspace-events KEl
     ports:
-      - "6380:6379"  # exposed for local test scripts only — not present in production
+      - "6380:6379"
 
   server:
     depends_on:
       - redis
       - mobile-redis
+      - postgres

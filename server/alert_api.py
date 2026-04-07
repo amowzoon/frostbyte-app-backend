@@ -1,28 +1,23 @@
 """
 alert_api.py
+------------
+Alert and user preferences endpoints backed by local Postgres.
 """
 
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
-from typing import Optional
-import httpx
-import os
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+import asyncpg
+from fastapi import APIRouter, HTTPException, Query, Depends
+from pydantic import BaseModel
+
+from db import get_pool
+from auth_api import get_current_user
 
 log = logging.getLogger("app.alerts")
 
 alert_router = APIRouter(prefix="/api/app")
-
-SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
-
-HEADERS = {
-    "apikey": SUPABASE_SERVICE_KEY,
-    "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-    "Content-Type": "application/json",
-    "Prefer": "return=representation",
-}
 
 
 # ---------------------------------------------------------------------------
@@ -30,11 +25,9 @@ HEADERS = {
 # ---------------------------------------------------------------------------
 
 class PushTokenRequest(BaseModel):
-    user_id: str
     push_token: str
 
 class UserSettings(BaseModel):
-    user_id: str
     alert_radius_m: Optional[int] = 500
     notify_ice: Optional[bool] = True
     notify_bluetooth: Optional[bool] = True
@@ -55,20 +48,15 @@ class AlertCreate(BaseModel):
 # ---------------------------------------------------------------------------
 
 @alert_router.post("/push-token")
-async def store_push_token(req: PushTokenRequest):
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        r = await client.patch(
-            f"{SUPABASE_URL}/rest/v1/user_preferences",
-            headers=HEADERS,
-            params={"user_id": f"eq.{req.user_id}"},
-            json={"push_token": req.push_token, "updated_at": datetime.now(timezone.utc).isoformat()},
-        )
-        if r.status_code == 404 or r.json() == []:
-            await client.post(
-                f"{SUPABASE_URL}/rest/v1/user_preferences",
-                headers=HEADERS,
-                json={"user_id": req.user_id, "push_token": req.push_token},
-            )
+async def store_push_token(req: PushTokenRequest, user=Depends(get_current_user)):
+    pool: asyncpg.Pool = await get_pool()
+    await pool.execute("""
+        INSERT INTO user_preferences (user_id, push_token, updated_at)
+        VALUES ($1, $2, now())
+        ON CONFLICT (user_id) DO UPDATE
+            SET push_token = EXCLUDED.push_token,
+                updated_at = now()
+    """, user["sub"], req.push_token)
     return {"status": "ok"}
 
 
@@ -77,36 +65,32 @@ async def store_push_token(req: PushTokenRequest):
 # ---------------------------------------------------------------------------
 
 @alert_router.get("/settings")
-async def get_settings(user_id: str = Query(...)):
-    async with httpx.AsyncClient() as client:
-        r = await client.get(
-            f"{SUPABASE_URL}/rest/v1/user_preferences",
-            headers=HEADERS,
-            params={"user_id": f"eq.{user_id}", "select": "alert_radius_m,notify_ice,notify_bluetooth,notify_route"},
-        )
-    data = r.json()
-    if not data:
+async def get_settings(user=Depends(get_current_user)):
+    pool: asyncpg.Pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT alert_radius_m, notify_ice, notify_bluetooth, notify_route "
+        "FROM user_preferences WHERE user_id = $1",
+        user["sub"],
+    )
+    if not row:
         return {"alert_radius_m": 500, "notify_ice": True, "notify_bluetooth": True, "notify_route": True}
-    return data[0]
+    return dict(row)
 
 
 @alert_router.patch("/settings")
-async def update_settings(settings: UserSettings):
-    payload = {k: v for k, v in settings.dict().items() if k != "user_id" and v is not None}
-    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
-    async with httpx.AsyncClient() as client:
-        r = await client.patch(
-            f"{SUPABASE_URL}/rest/v1/user_preferences",
-            headers=HEADERS,
-            params={"user_id": f"eq.{settings.user_id}"},
-            json=payload,
-        )
-        if r.json() == []:
-            await client.post(
-                f"{SUPABASE_URL}/rest/v1/user_preferences",
-                headers=HEADERS,
-                json={"user_id": settings.user_id, **payload},
-            )
+async def update_settings(settings: UserSettings, user=Depends(get_current_user)):
+    pool: asyncpg.Pool = await get_pool()
+    await pool.execute("""
+        INSERT INTO user_preferences (user_id, alert_radius_m, notify_ice, notify_bluetooth, notify_route, updated_at)
+        VALUES ($1, $2, $3, $4, $5, now())
+        ON CONFLICT (user_id) DO UPDATE
+            SET alert_radius_m   = EXCLUDED.alert_radius_m,
+                notify_ice       = EXCLUDED.notify_ice,
+                notify_bluetooth = EXCLUDED.notify_bluetooth,
+                notify_route     = EXCLUDED.notify_route,
+                updated_at       = now()
+    """, user["sub"], settings.alert_radius_m, settings.notify_ice,
+        settings.notify_bluetooth, settings.notify_route)
     return {"status": "ok"}
 
 
@@ -121,53 +105,43 @@ async def get_nearby_alerts(
     radius_m: int = Query(2000),
 ):
     deg_offset = radius_m / 111000.0
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc)
+    pool: asyncpg.Pool = await get_pool()
 
-    async with httpx.AsyncClient() as client:
-        r = await client.get(
-            f"{SUPABASE_URL}/rest/v1/ice_alerts",
-            headers=HEADERS,
-            params={
-                "select": "id,latitude,longitude,confidence,alert_type,device_id,created_at,expires_at",
-                "active": "eq.true",
-                "is_test": "eq.false",
-                "expires_at": f"gt.{now}",
-                "order": "confidence.desc",
-                "limit": "50",
-            },
-        )
+    rows = await pool.fetch("""
+        SELECT id, latitude, longitude, confidence, alert_type, device_id, created_at, expires_at
+        FROM ice_alerts
+        WHERE active = true
+          AND is_test = false
+          AND expires_at > $1
+          AND latitude  BETWEEN $2 AND $3
+          AND longitude BETWEEN $4 AND $5
+        ORDER BY confidence DESC
+        LIMIT 50
+    """, now,
+        lat - deg_offset, lat + deg_offset,
+        lon - deg_offset, lon + deg_offset,
+    )
 
-    alerts = r.json() if r.status_code == 200 else []
+    alerts = [
+        {**dict(r), "id": str(r["id"]), "created_at": r["created_at"].isoformat(), "expires_at": r["expires_at"].isoformat()}
+        for r in rows
+    ]
     return {"alerts": alerts, "count": len(alerts)}
 
 
 @alert_router.post("/alerts")
 async def create_alert(alert: AlertCreate):
-    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=alert.expires_minutes)).isoformat()
-    payload = {
-        "latitude": alert.latitude,
-        "longitude": alert.longitude,
-        "confidence": alert.confidence,
-        "alert_type": alert.alert_type,
-        "device_id": alert.device_id,
-        "expires_at": expires_at,
-        "active": True,
-        "is_test": alert.is_test,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=alert.expires_minutes)
+    pool: asyncpg.Pool = await get_pool()
 
-    async with httpx.AsyncClient() as client:
-        r = await client.post(
-            f"{SUPABASE_URL}/rest/v1/ice_alerts",
-            headers=HEADERS,
-            json=payload,
-        )
+    row = await pool.fetchrow("""
+        INSERT INTO ice_alerts (latitude, longitude, confidence, alert_type, device_id, expires_at, active, is_test)
+        VALUES ($1, $2, $3, $4, $5, $6, true, $7)
+        RETURNING id
+    """, alert.latitude, alert.longitude, alert.confidence,
+        alert.alert_type, alert.device_id, expires_at, alert.is_test)
 
-    if r.status_code not in (200, 201):
-        log.error(f"Failed to create alert: {r.text}")
-        raise HTTPException(500, "Failed to create alert in Supabase")
-
-    data = r.json()
-    alert_id = data[0]["id"] if data else None
+    alert_id = str(row["id"])
     log.info(f"Alert created: id={alert_id} conf={alert.confidence:.2f}")
     return {"status": "ok", "alert_id": alert_id}

@@ -1,6 +1,8 @@
 fastapi
 uvicorn
-httpx
 python-multipart
 pydantic
+asyncpg
 redis[asyncio]
+bcrypt
+python-jose[cryptography]
