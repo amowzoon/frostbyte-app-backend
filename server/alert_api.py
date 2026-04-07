@@ -1,15 +1,5 @@
 """
 alert_api.py
-------------
-All app-facing endpoints. Reads and writes to Supabase directly.
-No local database — Supabase is the single source of truth.
-
-Endpoints:
-  POST /api/app/push-token          Store push notification token
-  GET  /api/app/settings            Get user alert preferences
-  PATCH /api/app/settings           Update user alert preferences
-  GET  /api/app/alerts/nearby       Get active ice alerts near a location (public)
-  POST /api/app/alerts              Create a new ice alert (internal use)
 """
 
 from fastapi import APIRouter, HTTPException, Query
@@ -66,7 +56,7 @@ class AlertCreate(BaseModel):
 
 @alert_router.post("/push-token")
 async def store_push_token(req: PushTokenRequest):
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.patch(
             f"{SUPABASE_URL}/rest/v1/user_preferences",
             headers=HEADERS,
@@ -130,10 +120,6 @@ async def get_nearby_alerts(
     lon: float = Query(...),
     radius_m: int = Query(2000),
 ):
-    """
-    Returns active non-test ice alerts within a bounding box.
-    Client-side Haversine filtering handles precise radius.
-    """
     deg_offset = radius_m / 111000.0
     now = datetime.now(timezone.utc).isoformat()
 
@@ -146,10 +132,6 @@ async def get_nearby_alerts(
                 "active": "eq.true",
                 "is_test": "eq.false",
                 "expires_at": f"gt.{now}",
-                "latitude": f"gte.{lat - deg_offset}",
-                "latitude": f"lte.{lat + deg_offset}",
-                "longitude": f"gte.{lon - deg_offset}",
-                "longitude": f"lte.{lon + deg_offset}",
                 "order": "confidence.desc",
                 "limit": "50",
             },
@@ -161,10 +143,6 @@ async def get_nearby_alerts(
 
 @alert_router.post("/alerts")
 async def create_alert(alert: AlertCreate):
-    """
-    Create an ice alert in Supabase.
-    Called by the inference pipeline after confidence > 0.5.
-    """
     expires_at = (datetime.now(timezone.utc) + timedelta(minutes=alert.expires_minutes)).isoformat()
     payload = {
         "latitude": alert.latitude,
@@ -191,5 +169,5 @@ async def create_alert(alert: AlertCreate):
 
     data = r.json()
     alert_id = data[0]["id"] if data else None
-    log.info(f"Alert created: id={alert_id} conf={alert.confidence:.2f} loc=({alert.latitude},{alert.longitude})")
+    log.info(f"Alert created: id={alert_id} conf={alert.confidence:.2f}")
     return {"status": "ok", "alert_id": alert_id}

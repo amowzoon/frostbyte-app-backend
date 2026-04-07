@@ -1,3 +1,7 @@
+# Base compose file.
+# Included by frostbyte-backend's docker-compose.yml in production.
+# For standalone dev, layer docker-compose.dev.yml on top.
+
 services:
   server:
     build: ./server
@@ -7,6 +11,17 @@ services:
     volumes:
       - ./server:/app
     environment:
-      - SUPABASE_URL=https://izmvxaayfqiznokbpfif.supabase.co
-      - SUPABASE_SERVICE_KEY=${sb_secret}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - SHARED_REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
+      - PRIVATE_REDIS_URL=redis://mobile-redis:6379
+    depends_on:
+      - mobile-redis
+    restart: unless-stopped
+
+  mobile-redis:
+    image: redis:7-alpine
+    container_name: mobile-redis
+    # No password needed — internal only, no host port
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
     restart: unless-stopped
