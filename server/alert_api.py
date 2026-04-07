@@ -145,3 +145,24 @@ async def create_alert(alert: AlertCreate):
     alert_id = str(row["id"])
     log.info(f"Alert created: id={alert_id} conf={alert.confidence:.2f}")
     return {"status": "ok", "alert_id": alert_id}
+
+
+# ---------------------------------------------------------------------------
+# Delete alerts
+# ---------------------------------------------------------------------------
+
+@alert_router.delete("/alerts/expired")
+async def clear_expired_alerts():
+    pool: asyncpg.Pool = await get_pool()
+    result = await pool.execute("DELETE FROM ice_alerts WHERE expires_at < now()")
+    deleted = result.split()[-1]
+    log.info(f"Cleared {deleted} expired alerts")
+    return {"status": "ok", "deleted": int(deleted)}
+
+
+@alert_router.delete("/alerts/{alert_id}")
+async def delete_alert(alert_id: str):
+    pool: asyncpg.Pool = await get_pool()
+    await pool.execute("DELETE FROM ice_alerts WHERE id = $1", alert_id)
+    log.info(f"Deleted alert: {alert_id}")
+    return {"status": "ok"}
