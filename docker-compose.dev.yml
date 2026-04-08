@@ -15,8 +15,8 @@ services:
     ports:
       - "6380:6379"
 
-  server:
+  app-server:
     depends_on:
       - redis
       - mobile-redis
-      - postgres
+      - app-postgres
