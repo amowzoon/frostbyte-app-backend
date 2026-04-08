@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
-"""
-Publish a test detection to Redis and verify the full pipeline:
-1. Publishes detection to Redis
-2. Waits for subscriber to process it
-3. Checks Redis for the key
-4. Checks Postgres for the resulting alert
-5. Checks the backend HTTP endpoint for the alert
+"""Simulate a frostbyte-backend detection publish for local dev testing.
+
+Pushes a synthetic detection entry into the shared Redis, triggering a
+keyspace notification exactly as the real backend would.
+
+Requirements:
+    pip install redis python-dotenv
 
 Usage:
     python scripts/publish_test_detection.py
+    python scripts/publish_test_detection.py --device-id my-pi --geotag "My Roof" --lat 42.35 --lon -71.06
+    python scripts/publish_test_detection.py --count 3   # publish 3 times to test LTRIM
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import struct
-import time
 import zlib
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,17 +29,11 @@ except ImportError:
     pass
 
 import redis
-import urllib.request
 
 DETECTION_KEY_PREFIX = "detection:"
 DETECTION_TTL_SECONDS = 3600
 MAX_DETECTIONS_PER_DEVICE = 2
 SEPARATOR = b"\n---MASK---\n"
-
-DEVICE_ID   = "test-pi"
-LATITUDE    = 42.348555
-LONGITUDE   = -71.116347
-BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8001")
 
 
 def _make_test_mask(width: int = 64, height: int = 64) -> bytes:
@@ -51,13 +47,13 @@ def _make_test_mask(width: int = 64, height: int = 64) -> bytes:
     return signature + make_chunk(b"IHDR", ihdr) + make_chunk(b"IDAT", idat) + make_chunk(b"IEND", b"")
 
 
-def publish_detection(client: redis.Redis) -> str:
-    key = f"{DETECTION_KEY_PREFIX}{DEVICE_ID}"
+def publish_detection(client: redis.Redis, device_id: str, geotag: str, latitude: float, longitude: float) -> str:
+    key = f"{DETECTION_KEY_PREFIX}{device_id}"
     entry = {
-        "device_id": DEVICE_ID,
-        "geotag": "Test Location",
-        "latitude": LATITUDE,
-        "longitude": LONGITUDE,
+        "device_id": device_id,
+        "geotag": geotag,
+        "latitude": latitude,
+        "longitude": longitude,
         "capture_id": None,
         "session_id": None,
         "metadata": {},
@@ -73,53 +69,38 @@ def publish_detection(client: redis.Redis) -> str:
     return key
 
 
+def parse_detection(raw: bytes) -> tuple[dict, bytes]:
+    parts = raw.split(SEPARATOR, 1)
+    if len(parts) != 2:
+        raise ValueError("Invalid detection entry format")
+    return json.loads(parts[0].decode("utf-8")), parts[1]
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Publish test detections to local dev Redis")
+    parser.add_argument("--device-id", default="test-pi")
+    parser.add_argument("--geotag", default="Test Location")
+    parser.add_argument("--lat", type=float, default=42.35)
+    parser.add_argument("--lon", type=float, default=-71.06)
+    parser.add_argument("--count", type=int, default=1)
+    args = parser.parse_args()
+
     password = os.environ.get("REDIS_PASSWORD")
     if not password:
-        raise SystemExit("Error: REDIS_PASSWORD not set.")
+        raise SystemExit("Error: REDIS_PASSWORD not set. Copy .env.template to .env and set a password.")
 
-    print("=" * 50)
-    print("FrostByte Pipeline Test")
-    print("=" * 50)
-
-    # Step 1: Connect to Redis
-    print("\n[1/4] Connecting to Redis...")
     client = redis.Redis(host="localhost", port=6380, password=password, decode_responses=False)
     client.ping()
-    print("      Redis connected")
 
-    # Step 2: Publish detection
-    print(f"\n[2/4] Publishing detection at ({LATITUDE}, {LONGITUDE})...")
-    key = publish_detection(client)
-    list_len = client.llen(key)
-    print(f"      Published to key={key}  list_len={list_len}")
+    for i in range(args.count):
+        key = publish_detection(client, args.device_id, args.geotag, args.lat, args.lon)
+        stored = client.lrange(key, 0, 0)[0]
+        meta, mask = parse_detection(stored)
+        list_len = client.llen(key)
+        print(f"[{i+1}/{args.count}] key={key}  list_len={list_len}  mask={len(mask)}B  ts={meta['timestamp']}")
 
-    # Step 3: Wait and check Redis
-    print("\n[3/4] Checking Redis for key...")
-    time.sleep(1)
-    keys = client.keys("detection:*")
-    print(f"      Keys in Redis: {[k.decode() for k in keys]}")
-
-    # Step 4: Wait for subscriber and check backend
-    print("\n[4/4] Waiting for subscriber to write alert to Postgres...")
-    time.sleep(3)
-    try:
-        url = f"{BACKEND_URL}/api/app/alerts/nearby?lat={LATITUDE}&lon={LONGITUDE}&radius_m=500"
-        with urllib.request.urlopen(url, timeout=5) as res:
-            data = json.loads(res.read())
-            alerts = data.get("alerts", [])
-            if alerts:
-                print(f"      Alert found in Postgres and returned by backend!")
-                for a in alerts:
-                    print(f"      id={a['id']} conf={a['confidence']} lat={a['latitude']} lon={a['longitude']}")
-            else:
-                print("      No alerts found near test location yet — check docker logs frostbyte-app-server")
-    except Exception as e:
-        print(f"      Backend check failed: {e}")
-
-    print("\n" + "=" * 50)
-    print("Done. Check the app map for the alert.")
-    print("=" * 50)
+    if args.count >= MAX_DETECTIONS_PER_DEVICE:
+        print(f"\nLTRIM check: list has {client.llen(key)} entries (expect {MAX_DETECTIONS_PER_DEVICE})")
 
 
 if __name__ == "__main__":
