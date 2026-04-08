@@ -22,12 +22,11 @@ import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Load .env from repo root if present
 try:
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 except ImportError:
-    pass  # dotenv optional — can set REDIS_PASSWORD in shell instead
+    pass
 
 import redis
 
@@ -38,11 +37,9 @@ SEPARATOR = b"\n---MASK---\n"
 
 
 def _make_test_mask(width: int = 64, height: int = 64) -> bytes:
-    """Generate a minimal valid 64x64 grayscale PNG."""
     def make_chunk(chunk_type: bytes, data: bytes) -> bytes:
         chunk = chunk_type + data
         return struct.pack(">I", len(data)) + chunk + struct.pack(">I", zlib.crc32(chunk) & 0xFFFFFFFF)
-
     signature = b"\x89PNG\r\n\x1a\n"
     ihdr = struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0)
     raw_data = b"".join(b"\x00" + bytes([128] * width) for _ in range(height))
@@ -85,7 +82,7 @@ def main() -> None:
     parser.add_argument("--geotag", default="Test Location")
     parser.add_argument("--lat", type=float, default=42.35)
     parser.add_argument("--lon", type=float, default=-71.06)
-    parser.add_argument("--count", type=int, default=1, help="Number of detections to publish")
+    parser.add_argument("--count", type=int, default=1)
     args = parser.parse_args()
 
     password = os.environ.get("REDIS_PASSWORD")
@@ -93,7 +90,7 @@ def main() -> None:
         raise SystemExit("Error: REDIS_PASSWORD not set. Copy .env.template to .env and set a password.")
 
     client = redis.Redis(host="localhost", port=6380, password=password, decode_responses=False)
-    client.ping()  # fail fast if Redis not reachable
+    client.ping()
 
     for i in range(args.count):
         key = publish_detection(client, args.device_id, args.geotag, args.lat, args.lon)
