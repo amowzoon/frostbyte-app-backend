@@ -5,9 +5,9 @@
 services:
   server:
     build: ./server
-    container_name: frostbyte-server
+    container_name: frostbyte-app-server
     ports:
-      - "8000:8000"
+      - "8001:8000"
     volumes:
       - ./server:/app
     environment:
@@ -30,13 +30,11 @@ services:
       - POSTGRES_DB=frostbyte
     volumes:
       - postgres-data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
     restart: unless-stopped
 
   mobile-redis:
     image: redis:7-alpine
-    container_name: mobile-redis
+    container_name: frostbyte-app-mobile-redis
     command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
     restart: unless-stopped
 
