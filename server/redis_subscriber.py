@@ -84,7 +84,11 @@ async def run_subscriber():
             await pubsub.psubscribe("__keyevent@0__:lpush")
             log.info("Subscribed to __keyevent@0__:lpush")
 
-            async for message in pubsub.listen():
+            while True:
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if message is None:
+                    await asyncio.sleep(0.1)
+                    continue
                 if message["type"] != "pmessage":
                     continue
                 key = message["data"].decode("utf-8")
