@@ -2,8 +2,9 @@
 redis_subscriber.py
 -------------------
 Background task: subscribes to keyspace notifications on shared Redis.
-On detection:* lpush events, reads the newest entry and writes an
-ice_alert row directly to local Postgres.
+On detection:* lpush events, reads the newest entry, writes an
+ice_alert row to local Postgres, and broadcasts it to all connected
+WebSocket clients.
 """
 
 import asyncio
@@ -34,13 +35,13 @@ def parse_detection(raw: bytes) -> dict | None:
         return None
 
 
-async def write_alert(meta: dict):
+async def write_alert(meta: dict) -> dict | None:
     pool: asyncpg.Pool = await get_pool()
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=ALERT_EXPIRES_MINUTES)
     row = await pool.fetchrow("""
         INSERT INTO ice_alerts (latitude, longitude, confidence, alert_type, device_id, expires_at, active, is_test)
         VALUES ($1, $2, $3, $4, $5, $6, true, false)
-        RETURNING id
+        RETURNING id, latitude, longitude, confidence, alert_type, device_id, created_at, expires_at
     """,
         meta["latitude"],
         meta["longitude"],
@@ -54,6 +55,16 @@ async def write_alert(meta: dict):
         f"lat={meta['latitude']:.5f} lon={meta['longitude']:.5f} "
         f"conf={meta.get('confidence', DEFAULT_CONFIDENCE):.2f}"
     )
+    return {
+        "id": str(row["id"]),
+        "latitude": row["latitude"],
+        "longitude": row["longitude"],
+        "confidence": row["confidence"],
+        "alert_type": row["alert_type"],
+        "device_id": row["device_id"],
+        "created_at": row["created_at"].isoformat(),
+        "expires_at": row["expires_at"].isoformat(),
+    }
 
 
 async def handle_detection(redis_client: aioredis.Redis, key: str):
@@ -67,7 +78,12 @@ async def handle_detection(redis_client: aioredis.Redis, key: str):
         if not all(k in meta for k in ("latitude", "longitude")):
             log.warning(f"Detection missing lat/lon: {meta}")
             return
-        await write_alert(meta)
+        alert = await write_alert(meta)
+        if alert:
+            # Import here to avoid circular import at module load time
+            from ws_manager import manager
+            await manager.broadcast({"type": "new_alert", "alert": alert})
+            log.info(f"Broadcast alert {alert['id']} to {len(manager.active)} WS clients")
     except Exception as e:
         log.error(f"handle_detection error for {key}: {e}")
 
