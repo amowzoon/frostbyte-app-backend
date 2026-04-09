@@ -2,19 +2,21 @@
 FrostByte App Backend
 ---------------------
 FastAPI server backed by local Postgres (no Supabase).
-Handles auth, alerts, user settings, and Redis detection subscriber.
+Handles auth, alerts, user settings, Redis detection subscriber,
+and WebSocket push to connected app clients.
 """
 
 import asyncio
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from db import init_pool
 from alert_api import alert_router
 from auth_api import auth_router
 from redis_subscriber import run_subscriber
+from ws_manager import manager
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("app.server")
@@ -30,6 +32,18 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(alert_router)
+
+
+@app.websocket("/ws/alerts")
+async def alerts_websocket(ws: WebSocket):
+    await manager.connect(ws)
+    try:
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(ws)
+    except Exception:
+        manager.disconnect(ws)
 
 
 @app.on_event("startup")
