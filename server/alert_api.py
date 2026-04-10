@@ -110,12 +110,17 @@ async def get_nearby_alerts(
 
     rows = await pool.fetch("""
         SELECT id, latitude, longitude, confidence, alert_type, device_id, created_at, expires_at
-        FROM ice_alerts
-        WHERE active = true
-          AND is_test = false
-          AND expires_at > $1
-          AND latitude  BETWEEN $2 AND $3
-          AND longitude BETWEEN $4 AND $5
+        FROM (
+            SELECT *,
+                ROW_NUMBER() OVER (PARTITION BY device_id ORDER BY created_at DESC) AS rn
+            FROM ice_alerts
+            WHERE active = true
+              AND is_test = false
+              AND expires_at > $1
+              AND latitude  BETWEEN $2 AND $3
+              AND longitude BETWEEN $4 AND $5
+        ) ranked
+        WHERE rn <= 2
         ORDER BY confidence DESC
         LIMIT 50
     """, now,
