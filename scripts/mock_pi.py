@@ -2,14 +2,13 @@
 """
 mock_pi.py
 ----------
-Simulates a FrostByte Pi device publishing detections to shared Redis.
-Publishes 3 detections, 20 seconds apart, near a fixed base location
-with a small random offset each time.
+Simulates two FrostByte Pi devices publishing detections to shared Redis.
+Each device publishes 4 detections clustered around its own base location.
 
 Usage:
     python scripts/mock_pi.py
     python scripts/mock_pi.py --lat 42.348555 --lon -71.116347
-    python scripts/mock_pi.py --lat 42.348555 --lon -71.116347 --count 5 --interval 10
+    python scripts/mock_pi.py --lat 42.348555 --lon -71.116347 --count 4 --interval 10
 """
 from __future__ import annotations
 
@@ -36,10 +35,12 @@ DETECTION_TTL_SECONDS = 3600
 MAX_DETECTIONS_PER_DEVICE = 10
 SEPARATOR = b"\n---MASK---\n"
 
-# Default base location — override with --lat/--lon
 DEFAULT_LAT = 42.348555
 DEFAULT_LON = -71.116347
-OFFSET = 0.0005  # ~50m radius
+OFFSET = 0.0005  # ~50m radius per device cluster
+
+# Second device is offset ~200m from the first
+DEVICE_OFFSET = 0.002
 
 
 def _make_test_mask(width: int = 64, height: int = 64) -> bytes:
@@ -57,7 +58,7 @@ def publish_detection(client: redis.Redis, device_id: str, latitude: float, long
     key = f"{DETECTION_KEY_PREFIX}{device_id}"
     entry = {
         "device_id": device_id,
-        "geotag": "Mock Pi",
+        "geotag": f"Mock {device_id}",
         "latitude": latitude,
         "longitude": longitude,
         "confidence": confidence,
@@ -77,13 +78,12 @@ def publish_detection(client: redis.Redis, device_id: str, latitude: float, long
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Mock Pi — publishes detections to shared Redis")
+    parser = argparse.ArgumentParser(description="Mock Pi — simulates 2 devices publishing to shared Redis")
     parser.add_argument("--lat",      type=float, default=DEFAULT_LAT)
     parser.add_argument("--lon",      type=float, default=DEFAULT_LON)
-    parser.add_argument("--count",    type=int,   default=3,  help="Number of detections to publish")
+    parser.add_argument("--count",    type=int,   default=4,  help="Detections per device (default: 4, total: 8)")
     parser.add_argument("--interval", type=int,   default=20, help="Seconds between detections")
-    parser.add_argument("--device-id", default="mock-pi")
-    parser.add_argument("--fixed",    action="store_true", help="Use exact lat/lon with no random offset")
+    parser.add_argument("--fixed",    action="store_true", help="No random offset within each device cluster")
     args = parser.parse_args()
 
     password = os.environ.get("REDIS_PASSWORD")
@@ -93,33 +93,43 @@ def main() -> None:
     client = redis.Redis(host="localhost", port=6380, password=password, decode_responses=False)
     client.ping()
 
-    print(f"Mock Pi starting — {args.count} detections, {args.interval}s apart")
-    print(f"Base location: ({args.lat}, {args.lon})")
-    print(f"Offset: {'none (fixed)' if args.fixed else f'±{OFFSET} degrees (~50m)'}")
-    print("-" * 50)
+    # Device base locations — device 2 is ~200m away from device 1
+    devices = [
+        {"id": "mock-pi-1", "base_lat": args.lat,               "base_lon": args.lon},
+        {"id": "mock-pi-2", "base_lat": args.lat + DEVICE_OFFSET, "base_lon": args.lon + DEVICE_OFFSET},
+    ]
 
+    total = args.count * len(devices)
+    print(f"Mock Pi starting — {len(devices)} devices × {args.count} detections = {total} total")
+    print(f"Device 1 (mock-pi-1): ({devices[0]['base_lat']:.6f}, {devices[0]['base_lon']:.6f})")
+    print(f"Device 2 (mock-pi-2): ({devices[1]['base_lat']:.6f}, {devices[1]['base_lon']:.6f})")
+    print(f"Interval: {args.interval}s between detections")
+    print("-" * 60)
+
+    # Interleave detections from both devices
     for i in range(args.count):
-        if args.fixed:
-            lat = args.lat
-            lon = args.lon
-        else:
-            lat = args.lat + random.uniform(-OFFSET, OFFSET)
-            lon = args.lon + random.uniform(-OFFSET, OFFSET)
+        for device in devices:
+            if args.fixed:
+                lat = device["base_lat"]
+                lon = device["base_lon"]
+            else:
+                lat = device["base_lat"] + random.uniform(-OFFSET, OFFSET)
+                lon = device["base_lon"] + random.uniform(-OFFSET, OFFSET)
 
-        confidence = round(random.uniform(0.6, 0.95), 2)
-        key = publish_detection(client, args.device_id, lat, lon, confidence)
+            confidence = round(random.uniform(0.6, 0.95), 2)
+            key = publish_detection(client, device["id"], lat, lon, confidence)
 
-        print(f"[{i+1}/{args.count}] Published detection")
-        print(f"         key={key}")
-        print(f"         lat={lat:.6f}  lon={lon:.6f}  conf={confidence}")
-        print(f"         time={datetime.now().strftime('%H:%M:%S')}")
+            print(f"[{i+1}/{args.count}] {device['id']}")
+            print(f"         key={key}")
+            print(f"         lat={lat:.6f}  lon={lon:.6f}  conf={confidence}")
+            print(f"         time={datetime.now().strftime('%H:%M:%S')}")
 
         if i < args.count - 1:
             print(f"         waiting {args.interval}s...")
             time.sleep(args.interval)
 
-    print("-" * 50)
-    print(f"Done. {args.count} detections published.")
+    print("-" * 60)
+    print(f"Done. {total} detections published across {len(devices)} devices.")
 
 
 if __name__ == "__main__":
