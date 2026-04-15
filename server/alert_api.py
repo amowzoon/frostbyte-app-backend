@@ -7,6 +7,7 @@ Alert and user preferences endpoints backed by local Postgres.
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+import math
 
 import asyncpg
 from fastapi import APIRouter, HTTPException, Query, Depends
@@ -135,6 +136,64 @@ async def get_nearby_alerts(
     return {"alerts": alerts, "count": len(alerts)}
 
 
+# ---------------------------------------------------------------------------
+# Devices nearby (internet-based proximity scan)
+# ---------------------------------------------------------------------------
+
+def haversine_m(lat1, lon1, lat2, lon2):
+    R = 6371000
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+@alert_router.get("/devices/nearby")
+async def get_devices_nearby(
+    lat: float = Query(...),
+    lon: float = Query(...),
+    radius_m: int = Query(80),
+):
+    deg_offset = radius_m / 111000.0
+    now = datetime.now(timezone.utc)
+    pool: asyncpg.Pool = await get_pool()
+
+    rows = await pool.fetch("""
+        SELECT DISTINCT ON (device_id)
+            device_id, latitude, longitude, confidence, created_at
+        FROM ice_alerts
+        WHERE active = true
+          AND is_test = false
+          AND expires_at > $1
+          AND device_id IS NOT NULL
+          AND latitude  BETWEEN $2 AND $3
+          AND longitude BETWEEN $4 AND $5
+        ORDER BY device_id, created_at DESC
+    """, now,
+        lat - deg_offset, lat + deg_offset,
+        lon - deg_offset, lon + deg_offset,
+    )
+
+    devices = []
+    for r in rows:
+        dist = haversine_m(lat, lon, r["latitude"], r["longitude"])
+        devices.append({
+            "device_id": r["device_id"],
+            "latitude": r["latitude"],
+            "longitude": r["longitude"],
+            "confidence": r["confidence"],
+            "distance_m": round(dist),
+            "last_seen": r["created_at"].isoformat(),
+        })
+
+    devices.sort(key=lambda d: d["distance_m"])
+    return {"devices": devices, "count": len(devices)}
+
+
+# ---------------------------------------------------------------------------
+# Create / delete alerts
+# ---------------------------------------------------------------------------
+
 @alert_router.post("/alerts")
 async def create_alert(alert: AlertCreate):
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=alert.expires_minutes)
@@ -151,10 +210,6 @@ async def create_alert(alert: AlertCreate):
     log.info(f"Alert created: id={alert_id} conf={alert.confidence:.2f}")
     return {"status": "ok", "alert_id": alert_id}
 
-
-# ---------------------------------------------------------------------------
-# Delete alerts
-# ---------------------------------------------------------------------------
 
 @alert_router.delete("/alerts/expired")
 async def clear_expired_alerts():
