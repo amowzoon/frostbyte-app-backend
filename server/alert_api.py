@@ -96,7 +96,30 @@ async def update_settings(settings: UserSettings, user=Depends(get_current_user)
 
 
 # ---------------------------------------------------------------------------
-# Alerts
+# Helpers
+# ---------------------------------------------------------------------------
+
+def period_start(period: str) -> datetime:
+    now = datetime.now(timezone.utc)
+    if period == "today":
+        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+    elif period == "week":
+        return now - timedelta(days=7)
+    elif period == "month":
+        return now - timedelta(days=30)
+    return now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+def haversine_m(lat1, lon1, lat2, lon2):
+    R = 6371000
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+# ---------------------------------------------------------------------------
+# Alerts nearby
 # ---------------------------------------------------------------------------
 
 @alert_router.get("/alerts/nearby")
@@ -137,16 +160,70 @@ async def get_nearby_alerts(
 
 
 # ---------------------------------------------------------------------------
-# Devices nearby (internet-based proximity scan)
+# Alert history (for dashboard)
 # ---------------------------------------------------------------------------
 
-def haversine_m(lat1, lon1, lat2, lon2):
-    R = 6371000
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lon2 - lon1)
-    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+@alert_router.get("/alerts/history")
+async def get_alert_history(
+    period: str = Query("today"),
+):
+    since = period_start(period)
+    pool: asyncpg.Pool = await get_pool()
+
+    rows = await pool.fetch("""
+        SELECT id, latitude, longitude, confidence, alert_type, device_id, created_at
+        FROM ice_alerts
+        WHERE is_test = false
+          AND created_at >= $1
+        ORDER BY created_at DESC
+        LIMIT 200
+    """, since)
+
+    alerts = [
+        {**dict(r), "id": str(r["id"]), "created_at": r["created_at"].isoformat()}
+        for r in rows
+    ]
+    return {"alerts": alerts, "count": len(alerts)}
+
+
+# ---------------------------------------------------------------------------
+# All devices
+# ---------------------------------------------------------------------------
+
+@alert_router.get("/devices")
+async def get_all_devices():
+    pool: asyncpg.Pool = await get_pool()
+    # A device is "active" if it reported in the last 10 minutes
+    rows = await pool.fetch("""
+        SELECT
+            device_id,
+            MAX(created_at) AS last_seen,
+            COUNT(*)        AS total_alerts,
+            AVG(confidence) AS avg_confidence,
+            MAX(created_at) > now() - INTERVAL '10 minutes' AS is_active
+        FROM ice_alerts
+        WHERE device_id IS NOT NULL
+          AND is_test = false
+        GROUP BY device_id
+        ORDER BY last_seen DESC
+    """)
+
+    devices = [
+        {
+            "device_id":      r["device_id"],
+            "last_seen":      r["last_seen"].isoformat(),
+            "total_alerts":   r["total_alerts"],
+            "avg_confidence": float(r["avg_confidence"]) if r["avg_confidence"] else None,
+            "is_active":      r["is_active"],
+        }
+        for r in rows
+    ]
+    return {"devices": devices, "count": len(devices)}
+
+
+# ---------------------------------------------------------------------------
+# Devices nearby (internet-based proximity scan)
+# ---------------------------------------------------------------------------
 
 @alert_router.get("/devices/nearby")
 async def get_devices_nearby(
@@ -178,16 +255,45 @@ async def get_devices_nearby(
     for r in rows:
         dist = haversine_m(lat, lon, r["latitude"], r["longitude"])
         devices.append({
-            "device_id": r["device_id"],
-            "latitude": r["latitude"],
-            "longitude": r["longitude"],
+            "device_id":  r["device_id"],
+            "latitude":   r["latitude"],
+            "longitude":  r["longitude"],
             "confidence": r["confidence"],
             "distance_m": round(dist),
-            "last_seen": r["created_at"].isoformat(),
+            "last_seen":  r["created_at"].isoformat(),
         })
 
     devices.sort(key=lambda d: d["distance_m"])
     return {"devices": devices, "count": len(devices)}
+
+
+# ---------------------------------------------------------------------------
+# Stats
+# ---------------------------------------------------------------------------
+
+@alert_router.get("/stats")
+async def get_stats(period: str = Query("today")):
+    since = period_start(period)
+    pool: asyncpg.Pool = await get_pool()
+
+    row = await pool.fetchrow("""
+        SELECT
+            COUNT(*)                                          AS total_alerts,
+            COUNT(DISTINCT device_id)                        AS unique_devices,
+            AVG(confidence)                                  AS avg_confidence,
+            SUM(CASE WHEN confidence > 0.75 THEN 1 ELSE 0 END) AS high_confidence_alerts
+        FROM ice_alerts
+        WHERE is_test = false
+          AND created_at >= $1
+    """, since)
+
+    return {
+        "total_alerts":           row["total_alerts"]           or 0,
+        "unique_devices":         row["unique_devices"]         or 0,
+        "avg_confidence":         float(row["avg_confidence"])  if row["avg_confidence"] else None,
+        "high_confidence_alerts": row["high_confidence_alerts"] or 0,
+        "period":                 period,
+    }
 
 
 # ---------------------------------------------------------------------------
