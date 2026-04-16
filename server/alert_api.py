@@ -29,19 +29,20 @@ class PushTokenRequest(BaseModel):
     push_token: str
 
 class UserSettings(BaseModel):
-    alert_radius_m: Optional[int] = 500
-    notify_ice: Optional[bool] = True
-    notify_bluetooth: Optional[bool] = True
-    notify_route: Optional[bool] = True
+    alert_radius_m:   Optional[int]   = 500
+    notify_ice:       Optional[bool]  = True
+    notify_bluetooth: Optional[bool]  = True
+    notify_route:     Optional[bool]  = True
+    conf_min:         Optional[float] = 0.0   # NEW: confidence filter threshold
 
 class AlertCreate(BaseModel):
-    latitude: float
-    longitude: float
-    confidence: float
-    alert_type: str = "heuristic"
-    device_id: Optional[str] = None
-    expires_minutes: Optional[int] = 60
-    is_test: Optional[bool] = False
+    latitude:        float
+    longitude:       float
+    confidence:      float
+    alert_type:      str            = "heuristic"
+    device_id:       Optional[str]  = None
+    expires_minutes: Optional[int]  = 60
+    is_test:         Optional[bool] = False
 
 
 # ---------------------------------------------------------------------------
@@ -69,12 +70,18 @@ async def store_push_token(req: PushTokenRequest, user=Depends(get_current_user)
 async def get_settings(user=Depends(get_current_user)):
     pool: asyncpg.Pool = await get_pool()
     row = await pool.fetchrow(
-        "SELECT alert_radius_m, notify_ice, notify_bluetooth, notify_route "
+        "SELECT alert_radius_m, notify_ice, notify_bluetooth, notify_route, conf_min "
         "FROM user_preferences WHERE user_id = $1",
         user["sub"],
     )
     if not row:
-        return {"alert_radius_m": 500, "notify_ice": True, "notify_bluetooth": True, "notify_route": True}
+        return {
+            "alert_radius_m":   500,
+            "notify_ice":       True,
+            "notify_bluetooth": True,
+            "notify_route":     True,
+            "conf_min":         0.0,
+        }
     return dict(row)
 
 
@@ -82,16 +89,24 @@ async def get_settings(user=Depends(get_current_user)):
 async def update_settings(settings: UserSettings, user=Depends(get_current_user)):
     pool: asyncpg.Pool = await get_pool()
     await pool.execute("""
-        INSERT INTO user_preferences (user_id, alert_radius_m, notify_ice, notify_bluetooth, notify_route, updated_at)
-        VALUES ($1, $2, $3, $4, $5, now())
+        INSERT INTO user_preferences (
+            user_id, alert_radius_m, notify_ice, notify_bluetooth, notify_route, conf_min, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, now())
         ON CONFLICT (user_id) DO UPDATE
             SET alert_radius_m   = EXCLUDED.alert_radius_m,
                 notify_ice       = EXCLUDED.notify_ice,
                 notify_bluetooth = EXCLUDED.notify_bluetooth,
                 notify_route     = EXCLUDED.notify_route,
+                conf_min         = EXCLUDED.conf_min,
                 updated_at       = now()
-    """, user["sub"], settings.alert_radius_m, settings.notify_ice,
-        settings.notify_bluetooth, settings.notify_route)
+    """, user["sub"],
+        settings.alert_radius_m,
+        settings.notify_ice,
+        settings.notify_bluetooth,
+        settings.notify_route,
+        settings.conf_min,
+    )
     return {"status": "ok"}
 
 
@@ -112,7 +127,7 @@ def period_start(period: str) -> datetime:
 def haversine_m(lat1, lon1, lat2, lon2):
     R = 6371000
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
+    dphi    = math.radians(lat2 - lat1)
     dlambda = math.radians(lon2 - lon1)
     a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
@@ -124,9 +139,9 @@ def haversine_m(lat1, lon1, lat2, lon2):
 
 @alert_router.get("/alerts/nearby")
 async def get_nearby_alerts(
-    lat: float = Query(...),
-    lon: float = Query(...),
-    radius_m: int = Query(2000),
+    lat:      float = Query(...),
+    lon:      float = Query(...),
+    radius_m: int   = Query(2000),
 ):
     deg_offset = radius_m / 111000.0
     now = datetime.now(timezone.utc)
@@ -138,8 +153,8 @@ async def get_nearby_alerts(
             SELECT *,
                 ROW_NUMBER() OVER (PARTITION BY device_id ORDER BY created_at DESC) AS rn
             FROM ice_alerts
-            WHERE active = true
-              AND is_test = false
+            WHERE active    = true
+              AND is_test   = false
               AND expires_at > $1
               AND latitude  BETWEEN $2 AND $3
               AND longitude BETWEEN $4 AND $5
@@ -153,7 +168,12 @@ async def get_nearby_alerts(
     )
 
     alerts = [
-        {**dict(r), "id": str(r["id"]), "created_at": r["created_at"].isoformat(), "expires_at": r["expires_at"].isoformat()}
+        {
+            **dict(r),
+            "id":         str(r["id"]),
+            "created_at": r["created_at"].isoformat(),
+            "expires_at": r["expires_at"].isoformat(),
+        }
         for r in rows
     ]
     return {"alerts": alerts, "count": len(alerts)}
@@ -164,23 +184,25 @@ async def get_nearby_alerts(
 # ---------------------------------------------------------------------------
 
 @alert_router.get("/alerts/history")
-async def get_alert_history(
-    period: str = Query("today"),
-):
+async def get_alert_history(period: str = Query("today")):
     since = period_start(period)
     pool: asyncpg.Pool = await get_pool()
 
     rows = await pool.fetch("""
         SELECT id, latitude, longitude, confidence, alert_type, device_id, created_at
         FROM ice_alerts
-        WHERE is_test = false
+        WHERE is_test    = false
           AND created_at >= $1
         ORDER BY created_at DESC
         LIMIT 200
     """, since)
 
     alerts = [
-        {**dict(r), "id": str(r["id"]), "created_at": r["created_at"].isoformat()}
+        {
+            **dict(r),
+            "id":         str(r["id"]),
+            "created_at": r["created_at"].isoformat(),
+        }
         for r in rows
     ]
     return {"alerts": alerts, "count": len(alerts)}
@@ -193,14 +215,13 @@ async def get_alert_history(
 @alert_router.get("/devices")
 async def get_all_devices():
     pool: asyncpg.Pool = await get_pool()
-    # A device is "active" if it reported in the last 10 minutes
     rows = await pool.fetch("""
         SELECT
             device_id,
-            MAX(created_at) AS last_seen,
-            COUNT(*)        AS total_alerts,
-            AVG(confidence) AS avg_confidence,
-            MAX(created_at) > now() - INTERVAL '10 minutes' AS is_active
+            MAX(created_at)                                       AS last_seen,
+            COUNT(*)                                              AS total_alerts,
+            AVG(confidence)                                       AS avg_confidence,
+            MAX(created_at) > now() - INTERVAL '10 minutes'      AS is_active
         FROM ice_alerts
         WHERE device_id IS NOT NULL
           AND is_test = false
@@ -227,9 +248,9 @@ async def get_all_devices():
 
 @alert_router.get("/devices/nearby")
 async def get_devices_nearby(
-    lat: float = Query(...),
-    lon: float = Query(...),
-    radius_m: int = Query(80),
+    lat:      float = Query(...),
+    lon:      float = Query(...),
+    radius_m: int   = Query(80),
 ):
     deg_offset = radius_m / 111000.0
     now = datetime.now(timezone.utc)
@@ -239,8 +260,8 @@ async def get_devices_nearby(
         SELECT DISTINCT ON (device_id)
             device_id, latitude, longitude, confidence, created_at
         FROM ice_alerts
-        WHERE active = true
-          AND is_test = false
+        WHERE active    = true
+          AND is_test   = false
           AND expires_at > $1
           AND device_id IS NOT NULL
           AND latitude  BETWEEN $2 AND $3
@@ -278,12 +299,12 @@ async def get_stats(period: str = Query("today")):
 
     row = await pool.fetchrow("""
         SELECT
-            COUNT(*)                                          AS total_alerts,
-            COUNT(DISTINCT device_id)                        AS unique_devices,
-            AVG(confidence)                                  AS avg_confidence,
-            SUM(CASE WHEN confidence > 0.75 THEN 1 ELSE 0 END) AS high_confidence_alerts
+            COUNT(*)                                               AS total_alerts,
+            COUNT(DISTINCT device_id)                             AS unique_devices,
+            AVG(confidence)                                       AS avg_confidence,
+            SUM(CASE WHEN confidence > 0.75 THEN 1 ELSE 0 END)   AS high_confidence_alerts
         FROM ice_alerts
-        WHERE is_test = false
+        WHERE is_test    = false
           AND created_at >= $1
     """, since)
 
@@ -306,7 +327,9 @@ async def create_alert(alert: AlertCreate):
     pool: asyncpg.Pool = await get_pool()
 
     row = await pool.fetchrow("""
-        INSERT INTO ice_alerts (latitude, longitude, confidence, alert_type, device_id, expires_at, active, is_test)
+        INSERT INTO ice_alerts (
+            latitude, longitude, confidence, alert_type, device_id, expires_at, active, is_test
+        )
         VALUES ($1, $2, $3, $4, $5, $6, true, $7)
         RETURNING id
     """, alert.latitude, alert.longitude, alert.confidence,
@@ -320,7 +343,7 @@ async def create_alert(alert: AlertCreate):
 @alert_router.delete("/alerts/expired")
 async def clear_expired_alerts():
     pool: asyncpg.Pool = await get_pool()
-    result = await pool.execute("DELETE FROM ice_alerts WHERE expires_at < now()")
+    result  = await pool.execute("DELETE FROM ice_alerts WHERE expires_at < now()")
     deleted = result.split()[-1]
     log.info(f"Cleared {deleted} expired alerts")
     return {"status": "ok", "deleted": int(deleted)}
