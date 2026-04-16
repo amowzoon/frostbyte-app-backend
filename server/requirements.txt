@@ -6,3 +6,4 @@ asyncpg
 redis[asyncio]
 bcrypt
 python-jose[cryptography]
+websockets

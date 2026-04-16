@@ -17,7 +17,7 @@ python3 -m venv .venv
 ## 1. Start the dev stack
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+sudo docker compose --profile mobile -f docker-compose.yml -f docker-compose.dev.yml up --build -d
 ```
 
 This brings up:

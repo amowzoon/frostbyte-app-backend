@@ -7,7 +7,6 @@ Tracks connected app clients and broadcasts alert events to all of them.
 
 import json
 import logging
-from typing import set as Set
 from fastapi import WebSocket
 
 log = logging.getLogger("app.ws")
