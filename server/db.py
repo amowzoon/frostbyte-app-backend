@@ -25,10 +25,10 @@ async def _create_tables():
     async with _pool.acquire() as conn:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
-                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                email       TEXT UNIQUE NOT NULL,
-                password    TEXT NOT NULL,
-                created_at  TIMESTAMPTZ DEFAULT now()
+                id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                email         TEXT UNIQUE NOT NULL,
+                password      TEXT NOT NULL,
+                created_at    TIMESTAMPTZ DEFAULT now()
             );
 
             CREATE TABLE IF NOT EXISTS user_preferences (
@@ -37,6 +37,7 @@ async def _create_tables():
                 notify_ice       BOOL DEFAULT true,
                 notify_bluetooth BOOL DEFAULT true,
                 notify_route     BOOL DEFAULT true,
+                conf_min         FLOAT DEFAULT 0.0,
                 push_token       TEXT,
                 updated_at       TIMESTAMPTZ DEFAULT now()
             );
@@ -56,4 +57,10 @@ async def _create_tables():
 
             CREATE INDEX IF NOT EXISTS idx_ice_alerts_active
                 ON ice_alerts (active, is_test, expires_at);
+        """)
+
+        # Migrate existing tables if needed
+        await conn.execute("""
+            ALTER TABLE user_preferences
+                ADD COLUMN IF NOT EXISTS conf_min FLOAT DEFAULT 0.0;
         """)

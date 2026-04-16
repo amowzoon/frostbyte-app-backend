@@ -1,13 +1,6 @@
-"""
-FrostByte App Backend
----------------------
-FastAPI server backed by local Postgres (no Supabase).
-Handles auth, alerts, user settings, Redis detection subscriber,
-and WebSocket push to connected app clients.
-"""
-
 import asyncio
 import logging
+import os
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,7 +26,6 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(alert_router)
 
-
 @app.websocket("/ws/alerts")
 async def alerts_websocket(ws: WebSocket):
     await manager.connect(ws)
@@ -45,14 +37,12 @@ async def alerts_websocket(ws: WebSocket):
     except Exception:
         manager.disconnect(ws)
 
-
 @app.on_event("startup")
 async def startup():
     log.info("Initializing Postgres connection pool")
     await init_pool()
     log.info("Starting Redis subscriber background task")
     asyncio.create_task(run_subscriber())
-
 
 @app.get("/health")
 def health():

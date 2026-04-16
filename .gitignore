@@ -1,12 +1,35 @@
-minio-data/
-postgres-data/
-__pycache__/
-*.pyc
-*.pyo
+# Secrets — NEVER commit these
 .env
-*.log
-.DS_Store
+.env.local
+.env.*.local
+*.env
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
 .venv/
 venv/
-node_modules/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Docker volumes (if accidentally created locally)
+postgres-data/
+redis-data/
+minio-data/
+
+# Editor
 .vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
