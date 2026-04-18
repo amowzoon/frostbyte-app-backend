@@ -159,7 +159,7 @@ async def get_nearby_alerts(
               AND latitude  BETWEEN $2 AND $3
               AND longitude BETWEEN $4 AND $5
         ) ranked
-        WHERE rn <= 2
+        WHERE rn <= 1
         ORDER BY confidence DESC
         LIMIT 50
     """, now,
